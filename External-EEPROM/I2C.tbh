@@ -1,0 +1,15 @@
+'------------------------------------------------------------------------------
+'Enumerations
+
+'------------------------------------------------------------------------------
+'Global variables
+
+'------------------------------------------------------------------------------
+'Pins definition
+const SDA=			PL_IO_NUM_4_RTS
+const SCL=			PL_IO_NUM_5
+'------------------------------------------------------------------------------
+'Function/Subrutines declaration
+
+declare function StoreIP(byref IP as string)as byte
+declare sub RestoreIP()

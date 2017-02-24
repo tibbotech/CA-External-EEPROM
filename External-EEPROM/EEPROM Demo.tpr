@@ -1,0 +1,22 @@
+[project]
+platform=em202
+name=EEPROM Demo
+output=C:\eeprom.tpc
+debug=off
+address=0.0.0.0.0.0
+watch=
+[file1]
+path=main.tbs
+type=basic
+breakpoints=
+opened=yes
+[file2]
+path=I2C.tbs
+type=basic
+breakpoints=
+opened=active
+[file3]
+path=I2C.tbh
+type=header
+breakpoints=
+opened=yes

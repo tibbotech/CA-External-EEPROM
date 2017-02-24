@@ -1,0 +1,200 @@
+
+include "I2C.tbh"
+
+'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+'Global definitions
+'++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+'Constants
+
+const MY_IP_ADDRESS =		"10.1.100.11"		
+const MY_LOCAL_PORT =		"1021,2000"
+const IP_EE_PTR =			1
+const ACK = 				"ACK"
+const NAK = 				"NAK"
+'------------------------------------------------------------------------------
+'Enumerations
+
+enum status_enum
+	SETUP_MODE = 0,
+	NORMAL_MODE
+end enum
+'------------------------------------------------------------------------------
+'Global variables
+
+dim vSystemMode as byte 
+'------------------------------------------------------------------------------
+'Function/Subrutines declaration
+declare sub sSetup
+
+
+'******************************************************************************
+'System initialization
+'******************************************************************************
+sub on_sys_init
+	
+	pat.play("R-R-R-R-R-R-R-R-",NO)						'Blink RED led to notify sistem init
+'Socket initialization(set socket RX/TX BufferSizes)
+	sock.num = 0
+	sock.rxbuffrq(4)		'we ask for 4*256-16=1008 bytes for the RX buffer of socket 0
+	sock.txbuffrq(4)		'we ask for 4*256-16=1008 bytes for the TX buffer of socket 0
+	
+'Serial port initialization(Set serila port RX/TX BufferSizes)
+	ser.num = 0	
+	ser.rxbuffrq(4)			'we ask for 4*256-16=1008 bytes for the RX buffer of the serial port
+	ser.txbuffrq(4)			'we ask for 4*256-16=1008 bytes for the TX buffer of the serial port
+	
+'Allocate previously defined buffers	
+	sys.buffalloc			'Allocate designated memory for buffers
+	
+'Setup socket for TCP/IP.
+	sock.num = 0							
+	sock.protocol = PL_SOCK_PROTOCOL_TCP				'Use TCP Protocol
+	sock.localportlist = MY_LOCAL_PORT					'Listening ports
+	sock.inconmode = PL_SOCK_INCONMODE_ANY_IP_ANY_PORT	'Accept connection from any host
+	RestoreIP											'Get previously stored IP from  ext. EEPROM
+	
+'Setup SERIAL port for 38400/8N1	
+	ser.num = 0	
+	ser.interface = PL_SER_SI_FULLDUPLEX				'Use FULL DUPLEX comm mode
+	ser.parity = PL_SER_PR_NONE							'NONE parity
+	ser.flowcontrol = DISABLED							'Do NOT use Flow controll
+	ser.bits = PL_SER_BB_8								'8 bits data
+	ser.baudrate = 3 									'BoudRate is 38400b/s
+	ser.enabled = YES									'The serial port is now ON!
+
+'Initialize sistem "signals"
+	vSystemMode = NORMAL_MODE							'Power-up sustem mode
+	ser.num = 0	
+	io.num = PL_IO_NUM_2_DTR							'This is SOCKET_STATUS_LINE P#2 PORT LINE
+	io.state = HIGH										'Power-up status is HIGH
+	io.num = PL_IO_NUM_3_CTS							'This is SYSTEM_MODE line P#3 PORT LINE
+	io.state = HIGH										'Power-up status is HIGH
+	io.num = SCL
+	io.state = HIGH
+	io.num = SDA
+	io.state = HIGH
+
+'Plays an initialization pattern
+	pat.play("B-B-B-----------",YES)					'Blink Red & Green 3 times. 
+	
+end sub
+'******************************************************************************
+'Process socket data (on_sock_data_arrival)
+'******************************************************************************
+sub on_sock_data_arrival
+		
+	sock.num = 0
+	ser.setdata(sock.getdata(ser.txfree))
+	ser.send
+		
+end sub
+'******************************************************************************
+'Process serial data (on_ser_data_arrival)
+'******************************************************************************
+sub on_ser_data_arrival
+
+	ser.num = 0
+	if(vSystemMode = SETUP_MODE) then
+		sSetup
+	end if
+	
+	sock.setdata(ser.getdata(sock.txfree))
+	sock.send	
+	
+end sub
+'******************************************************************************
+'Process LED blinking (on_pat)
+'******************************************************************************
+sub on_pat
+
+	sock.num = 0			
+	if(vSystemMode = SETUP_MODE) then
+		pat.play("BBBBBBBBBBBBBBBB",NO)	
+		exit sub
+	end if
+	if(sock.statesimple = PL_SSTS_EST) then
+		pat.play("GGGGGGGGGGGGGGGG",NO)		'Connection established
+	else 
+		pat.play("*RGRGRGRGRGRGRGRG",NO)	'Connection NOT established
+	end if
+
+end sub
+'******************************************************************************
+'System timer subrutine
+'******************************************************************************
+sub on_sys_timer
+
+	ser.num = 0	
+'Process SOCKET_STAUS_LINE dependind on socket connection status
+	io.num = PL_IO_NUM_2_DTR				'This is the P#2 PORT LINE
+	if(sock.statesimple = PL_SSTS_EST) then
+		io.state = LOW						'Connection established
+	else	
+		io.state = HIGH						'Connection NOT established
+	end if
+
+'Process sistem mode depending on the state of DTR line
+	io.num = PL_IO_NUM_3_CTS				'This is the P#3 PORT LINE
+	if(io.state = LOW) then					'Check the EM202 operation mode
+		vSystemMode = SETUP_MODE			'Setup mode
+		sock.num = 0						
+		if NOT(sock.statesimple = PL_SSTS_CLOSED) then
+			sock.close						'In setup The socket must be closed
+		end if
+	else  
+		if NOT(vSystemMode = NORMAL_MODE) then
+			vSystemMode = NORMAL_MODE		'Normal mode
+			sys.reboot						'When leave the SETUP_MODE, rebbot the system
+		end if
+	end if	
+	
+end sub
+'******************************************************************************
+'EM202 parameters setup
+'******************************************************************************
+sub sSetup
+'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+'Must implement a SETUP protocol with Prefix, Lenght, Checksum.....
+'This is only for ASCII test!!!!!!!!!!
+'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+	dim Cmd as string(2)
+	dim Data as string(16)
+	dim Lng as byte
+		
+	
+	ser.num = 0
+	Cmd = ser.getdata(2)						'Get command from serial port
+	Data = ser.getdata(ser.rxlen)				'Get data from serial port
+	
+	select case Cmd
+		case "?I": case "?i":					'Get IP address cmd
+			ser.setdata("IP: " + net.ip)
+			
+		case "?M": case "?m":					'Get MAC address cmd
+			ser.setdata("MAC: " + net.mac)
+			
+		case "?P": case "?p":					'Get local port(s) cmd
+			ser.setdata("PORT: " + sock.localportlist)
+			
+		case "*I": case "*i":					'Set IP address cmd
+			if(0 = StoreIP(ddval(Data))) then	'Store IP value to external EEPROM
+				ser.setdata(NAK)				'Write in EE FAILURE
+			else
+				net.ip = Data					'Set IP data immediately
+				ser.setdata(ACK)				'Write in external EEPROM was OK
+			end if
+			
+		case "*P": case "*p":					'Set PORT cmd
+			sock.localportlist = Data
+			ser.setdata(ACK)					'Confirm command
+			
+		case else: 
+			ser.setdata("?")					'Unknown command
+	end select	
+		
+	ser.setdata(chr(&h0D) + chr(&h0A))			'CR+LF
+	ser.send									'Flush serial TX buffer
+
+end sub
+

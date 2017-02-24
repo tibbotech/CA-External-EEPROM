@@ -1,0 +1,212 @@
+
+include "I2C.tbh"
+
+'------------------------------------------------------------------------------
+'Enumerations
+
+'------------------------------------------------------------------------------
+'Global variables
+
+'------------------------------------------------------------------------------
+'Pins definition
+
+const IP_DATA_LNG=	3			'Lenght of binary IP data (0-3)
+const IP_EE_ADD=	0			'Address in external EEPROM
+const EE_ADD=		&hA0		'EEPROM hardware address (24C01...24C1025)
+'------------------------------------------------------------------------------
+'Function/Subrutines declaration
+
+declare sub I2C_Putc(x as byte)
+declare function I2C_Getc()as byte
+declare sub I2C_Start
+declare sub I2C_Stop
+declare sub I2C_Ack
+declare sub I2C_Nack
+
+'******************************************************************************
+'Store IP in external EEPROM
+'******************************************************************************
+public function StoreIP(byref IP as string)as byte
+
+	dim IP_bin as byte						'IP binary data
+	dim cnt as byte							'GP counter
+	dim ReadData as byte					'Data read back from EEPROM
+		
+	for cnt = 0 to IP_DATA_LNG				'Write 4 binary IP bytes
+	
+		'Store one byte data to external EEPROM
+		'---------------------------------------------------------------------
+		IP_bin = asc(mid(IP,1 + cnt,1))		'Convert singer character to binary data
+		I2C_Start							'Process I2C start frame
+		I2C_Putc(EE_ADD)					'24Cxxx HW address + WRITE
+		I2C_Putc(IP_EE_ADD + cnt)			'24Cxxx memory address
+		I2C_Putc(IP_bin)					'Send data to I2C device
+		I2C_Stop							'Terminate I2C writting (I2C stop frame)
+		
+		'Read back the stored data back
+		'---------------------------------------------------------------------
+		I2C_Start							'Process I2C start frame
+		I2C_Putc(&b10100000)				'Chip and region Address+WRITE
+		I2C_Putc(IP_EE_ADD + cnt)			'Memory address
+		I2C_Start							'Process I2C start(or restart) frame
+		I2C_Putc(EE_ADD + 1)				'24Cxxx HW address + READ
+		ReadData = I2C_Getc					'Get data from I2C device
+		I2C_Nack							'Terminate read procedure (I2C NACK frame)
+		I2C_Stop							'Terminate I2C reading (I2C stop frame)
+		
+		'Check if the data was written correctly
+		'---------------------------------------------------------------------
+		if(IP_bin <> ReadData) then			'Check for correct writtnig
+			StoreIP = 0						'Write in EEPROM error
+			exit function
+		end if			
+	next cnt
+	StoreIP = 1								'Write to ext. EEPROM was OK
+	
+end function
+'******************************************************************************
+'Update IP value from external EEPROM and save it in "net.ip" proprety
+'******************************************************************************	
+public sub RestoreIP
+	
+	dim cnt as byte							'GP counter
+	dim IP_bin as byte						'IP binary data
+	dim IP_str as string(5)					'IP string data + NULL character??
+	
+	for cnt = 0 to IP_DATA_LNG				'Read 4 binary IP bytes
+		I2C_Start							'Process I2C start frame
+		I2C_Putc(&b10100000)				'24Cxxx HW address + READ
+		I2C_Putc(IP_EE_ADD + cnt)			'Memory address
+		I2C_Start							'Process I2C start(or restart) frame
+		I2C_Putc(EE_ADD + 1)				'Chip and region Address+READ
+		IP_bin = I2C_Getc					'Get data from I2C device
+		I2C_Nack							'Terminate read procedure (I2C NACK frame)
+		I2C_Stop							'Terminate I2C reading (I2C stop frame)
+		IP_str = IP_str + chr(IP_bin)		'Concatenate IP string data(reconstruct...)
+	next cnt
+	net.ip = ddstr(IP_str)					'Store IP addres to "net.ip" proprety
+		
+end sub
+'******************************************************************************
+'I2C Put char subrutine
+'******************************************************************************
+sub I2C_Putc(vData as byte)
+
+	dim bitCnt as byte						'Bits counter	
+	dim CompVal as byte						'Value to compare - MASK
+	dim BitData as boolean					'Comparison result (1 or 0)
+	
+	io.num = SCL							'Initialize the transmition
+	io.state = LOW
+	bitCnt = 0								'Initialize the bits counter
+	CompVal = &h80							'Initialize the MASK
+	do until bitCnt = 8						'1 byte has 8 bits...
+		io.num = SDA						'Select SDA line
+		BitData = vData AND CompVal			'Define the state of the bit(MSB-->LSB)
+		if(BitData) then 
+			io.state = HIGH					'Bit is 1
+		else 
+			io.state = LOW					'Bit is 0
+		end if
+		io.num = SCL						'Write the bit to I2C device
+		io.state = HIGH
+		io.state = LOW
+		bitCnt = BitCnt + 1					'Increment bit counter(next bit)
+		CompVal = CompVal / 2				'Move the comparision to the next bit(MSB-->LSB)
+	loop
+	io.num = SDA							'Emulate the ACK frame
+	io.state = HIGH
+	io.num = SCL
+	io.state = HIGH
+	io.state = LOW
+
+end sub
+'******************************************************************************
+'I2C Get char function
+'******************************************************************************
+function I2C_getc as byte
+
+	dim bitCnt as byte						'Bit counter
+	dim CompVal as byte						'Value to compare - MASK
+	
+
+	io.num = SCL							'Initialize the reception
+	io.state = LOW
+	io.num = SDA
+	io.state = HIGH
+	bitCnt = 0								'Initialize the bits counter
+	CompVal = &h80							'Initialize the MASK
+	I2C_Getc = 0							'Initialize the received data
+	do until bitCnt = 8						'1 byte has 8 bits...
+		io.num = SCL						
+		io.state = HIGH						'Read one bit from I2C device
+		io.num = SDA
+		if(io.state = HIGH) then			'Devine the state of the bit
+			I2C_Getc = I2C_Getc OR CompVal	'Store the value of the bit
+		end if
+		bitCnt = bitCnt + 1					'Increment bit counter(next bit)
+		CompVal = CompVal / 2				'Move the comparision to the next bit(MSB-->LSB)			
+		io.num = SCL				
+		io.state = LOW						'Clear the clock line (the data can change now...)
+	loop	
+
+end function
+'******************************************************************************
+'I2C Start frame
+'******************************************************************************
+sub I2C_Start
+	
+	io.num = SCL
+	io.state = HIGH							'Set SCL line
+	io.num = SDA
+	io.state = HIGH							'Set SDA line
+	io.state = LOW							'Clear SDA line
+	io.num = SCL
+	io.state = LOW							'Clear SCL line
+	
+end sub
+'******************************************************************************
+'I2C Stop frame
+'******************************************************************************
+sub I2C_Stop
+	
+	io.num = SDA	
+	io.state = LOW							'Clear SDA line
+	io.num = SCL
+	io.state = HIGH							'Set SCL line
+	io.num = SDA
+	io.state = HIGH							'Set SDA line
+	io.num = SCL
+	io.state = HIGH							'Set SCL line
+	
+end sub
+'******************************************************************************
+'I2C ACK frame
+'******************************************************************************
+sub I2C_Ack
+	
+	io.num = SCL
+	io.state = LOW							'Clear SCL line
+	io.num = SDA
+	io.state = LOW							'Clear SDA line
+	io.num = SCL
+	io.state = HIGH							'Set SCL line
+	io.state = LOW							'Clear SCL line	
+	
+end sub
+'******************************************************************************
+'I2C NACK frame
+'******************************************************************************
+sub I2C_Nack
+	
+	io.num = SCL
+	io.state = LOW							'Clear SCL line
+	io.num = SDA
+	io.state = HIGH							'Set SDA line
+	io.num = SCL
+	io.state = HIGH							'Set SCL line
+	io.state = LOW							'Clear SCL line	
+	
+end sub
+
+
